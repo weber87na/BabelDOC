@@ -444,3 +444,7 @@ step by step.
 >     *   If the document is identified as heavily scanned (e.g., >80% scanned pages) AND `auto_enable_ocr_workaround` is `true` (i.e., `translation_config.auto_enable_ocr_workaround` is true), the system will then attempt to set both `ocr_workaround` to `true` and `skip_scanned_detection` to `true`.
 >
 > This means that `--auto-enable-ocr-workaround` effectively gives the system control to enable OCR processing for scanned documents, potentially overriding manual settings for `--ocr-workaround` and `--skip_scanned_detection` based on its detection results. If the document is *not* detected as heavily scanned, then the initial `false` values for `ocr_workaround` and `skip_scanned_detection` (forced by `--auto-enable-ocr-workaround` at the `TranslationConfig` initialization stage) will remain in effect unless changed by other logic.
+
+## ChatGPT 帳號登入（此 fork 新增）
+
+可透過官方 Codex App Server 使用 ChatGPT 訂閱登入，選擇帳號可用的模型與推理強度，無須 OpenAI API Key。請參閱 [繁體中文操作說明](docs/chatgpt-oauth.zh-TW.md)。此模式使用 ChatGPT／Codex 方案額度，並非無限使用。
