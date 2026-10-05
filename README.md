@@ -209,6 +209,10 @@ uv run babeldoc --files example.pdf --files example2.pdf --openai --openai-model
 - `--openai-model`: OpenAI model to use (default: gpt-4o-mini)
 - `--openai-base-url`: Base URL for OpenAI API
 - `--openai-api-key`: API key for OpenAI service
+- `--openai-reasoning`: Optional reasoning effort. OpenAI models use the Chat Completions `reasoning_effort` field; third-party models retain `reasoning.effort`. If unset, the model's default effort is used.
+- `--openai-term-extraction-reasoning`: Optional effort for a separate term extraction translator, including when no separate model is specified.
+- `--openai-max-completion-tokens`: Optional positive token budget for translation and term extraction, including reasoning tokens. LLM requests default to 16384 for known OpenAI reasoning models and 2048 for other models. An explicit budget also applies to paragraph fallback requests.
+- `--no-send-temperature`: Omit the temperature parameter. Known OpenAI reasoning models automatically omit it.
 - `--enable-json-mode-if-requested`: Enable JSON mode for OpenAI requests (default: False)
 - `--term-pool-max-workers`: Maximum number of worker threads dedicated to automatic term extraction. If not specified, this defaults to the value of `--pool-max-workers`, which itself defaults to the QPS value when unset.
 
@@ -216,6 +220,14 @@ uv run babeldoc --files example.pdf --files example2.pdf --openai --openai-model
 >
 > 1. This tool supports any OpenAI-compatible API endpoints. Just set the correct base URL and API key. (e.g. `https://xxx.custom.xxx/v1`)
 > 2. For local models like Ollama, you can use any value as the API key (e.g. `--openai-api-key a`).
+
+For `gpt-6-luna`, use the existing OpenAI API mode:
+
+```bash
+babeldoc --openai --openai-model gpt-6-luna --openai-api-key "your-api-key-here" --files example.pdf
+```
+
+The translator uses `max_completion_tokens` for known OpenAI reasoning models and keeps the legacy `max_tokens` field for other models unless an explicit budget is set for an OpenAI model. Empty, refused, or truncated responses are rejected before caching. If the completion budget is exhausted, increase `--openai-max-completion-tokens` or reduce the model's reasoning effort with `--openai-reasoning` (for example, `low`). The 16384-token default is a configurable starting budget, not a guarantee for every document. See the official [model migration guidance](https://developers.openai.com/api/docs/guides/latest-model) and [Chat Completions parameter reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
 
 ### Glossary Options
 
