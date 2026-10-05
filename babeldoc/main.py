@@ -440,13 +440,19 @@ def create_parser():
         "--no-send-temperature",
         action="store_true",
         default=False,
-        help="Do not send temperature parameter to OpenAI API (default: send temperature).",
+        help="Do not send temperature to the API. It is automatically omitted for known OpenAI reasoning models.",
     )
     service_group.add_argument(
         "--openai-reasoning",
         type=str,
         default=None,
-        help="Reasoning string to send in the OpenAI request body 'reasoning' field. If not set, the field is not sent.",
+        help="Reasoning effort: sent as reasoning_effort for OpenAI models, or reasoning.effort for third-party models. If unset, use the model default.",
+    )
+    service_group.add_argument(
+        "--openai-max-completion-tokens",
+        type=int,
+        default=None,
+        help="Completion token budget (including reasoning) for translation and term extraction. LLM requests default to 16384 for known OpenAI reasoning models, otherwise 2048.",
     )
     service_group.add_argument(
         "--openai-thinking",
@@ -459,15 +465,31 @@ def create_parser():
         "--openai-term-extraction-reasoning",
         type=str,
         default=None,
-        help="Reasoning string for the OpenAI term extraction translator. If not set, no reasoning field is sent for term extraction requests.",
+        help="Reasoning effort for term extraction. Uses the same model-specific field as --openai-reasoning.",
     )
 
+    from babeldoc.translator.chatgpt_client import add_arguments
+
+    add_arguments(parser)
     return parser
 
 
 async def main():
     parser = create_parser()
     args: Any = parser.parse_args()
+
+    from babeldoc.translator.chatgpt_client import ChatGPTError
+    from babeldoc.translator.chatgpt_client import handle_action
+
+    if args.chatgpt_device_auth and not args.chatgpt_login:
+        parser.error("--chatgpt-device-auth 必須搭配 --chatgpt-login")
+    if args.chatgpt and args.openai:
+        parser.error("--chatgpt 與 --openai 只能選一個")
+    try:
+        if handle_action(args):
+            return
+    except (ChatGPTError, ValueError, OSError) as exc:
+        parser.error(str(exc))
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -492,18 +514,43 @@ async def main():
         return
 
     # 验证翻译服务选择
-    if not args.openai:
-        parser.error("必须选择一个翻译服务：--openai")
+    if not (args.openai or args.chatgpt):
+        parser.error("必須選擇一個翻譯服務：--openai 或 --chatgpt")
+    if not args.files:
+        parser.error("請使用 --files 指定 PDF 檔案")
+    if args.chatgpt and args.enable_process_pool:
+        parser.error("--chatgpt 目前不支援 --enable-process-pool；請使用預設執行模式")
 
     # 验证 OpenAI 参数
     if args.openai and not args.openai_api_key:
         parser.error("使用 OpenAI 服务时必须提供 API key")
+    if (
+        args.openai_max_completion_tokens is not None
+        and args.openai_max_completion_tokens <= 0
+    ):
+        parser.error("--openai-max-completion-tokens must be positive")
 
     if args.enable_process_pool:
         enable_process_pool()
 
     # 实例化翻译器
-    if args.openai:
+    if args.chatgpt:
+        from babeldoc.translator.chatgpt import ChatGPTTranslator
+
+        try:
+            translator = ChatGPTTranslator(
+                lang_in=args.lang_in, lang_out=args.lang_out,
+                model=args.chatgpt_model, reasoning=args.chatgpt_reasoning,
+                codex_path=args.chatgpt_codex_path, timeout=args.chatgpt_timeout,
+                ignore_cache=args.ignore_cache,
+                enable_json_mode_if_requested=args.enable_json_mode_if_requested,
+            )
+        except (ChatGPTError, ValueError, OSError) as exc:
+            parser.error(str(exc))
+        term_extraction_translator = translator
+        logger.info("ChatGPT subscription: model=%s reasoning=%s (no API fallback)",
+                    translator.model, translator.reasoning)
+    elif args.openai:
         translator_kwargs: dict[str, Any] = {}
         if args.openai_reasoning is not None:
             translator_kwargs["reasoning"] = args.openai_reasoning
@@ -519,6 +566,7 @@ async def main():
             enable_json_mode_if_requested=args.enable_json_mode_if_requested,
             send_dashscope_header=args.send_dashscope_header,
             send_temperature=not args.no_send_temperature,
+            max_completion_tokens=args.openai_max_completion_tokens,
             **translator_kwargs,
         )
         term_extraction_translator = translator
@@ -526,6 +574,7 @@ async def main():
             args.openai_term_extraction_model
             or args.openai_term_extraction_base_url
             or args.openai_term_extraction_api_key
+            or args.openai_term_extraction_reasoning is not None
         ):
             term_translator_kwargs: dict[str, Any] = {}
             if args.openai_term_extraction_reasoning is not None:
@@ -542,6 +591,7 @@ async def main():
                 enable_json_mode_if_requested=args.enable_json_mode_if_requested,
                 send_dashscope_header=args.send_dashscope_header,
                 send_temperature=not args.no_send_temperature,
+                max_completion_tokens=args.openai_max_completion_tokens,
                 **term_translator_kwargs,
             )
     else:

@@ -37,6 +37,9 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: ChatGPT adapter tests (no credentials)
+        run: uv run python -m unittest discover -s tests -v
+
       - name: Build package
         run: uv build
 

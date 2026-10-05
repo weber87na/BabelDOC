@@ -65,6 +65,7 @@ Issues = "https://github.com/funstory-ai/BabelDOC/issues"
 
 [project.scripts]
 babeldoc = "babeldoc.main:cli"
+babeldoc-chatgpt = "babeldoc.translator.chatgpt_client:cli"
 
 [build-system]
 requires = ["hatchling"]
