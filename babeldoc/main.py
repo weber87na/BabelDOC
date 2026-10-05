@@ -440,13 +440,19 @@ def create_parser():
         "--no-send-temperature",
         action="store_true",
         default=False,
-        help="Do not send temperature parameter to OpenAI API (default: send temperature).",
+        help="Do not send temperature to the API. It is automatically omitted for known OpenAI reasoning models.",
     )
     service_group.add_argument(
         "--openai-reasoning",
         type=str,
         default=None,
-        help="Reasoning string to send in the OpenAI request body 'reasoning' field. If not set, the field is not sent.",
+        help="Reasoning effort: sent as reasoning_effort for OpenAI models, or reasoning.effort for third-party models. If unset, use the model default.",
+    )
+    service_group.add_argument(
+        "--openai-max-completion-tokens",
+        type=int,
+        default=None,
+        help="Completion token budget (including reasoning) for translation and term extraction. LLM requests default to 16384 for known OpenAI reasoning models, otherwise 2048.",
     )
     service_group.add_argument(
         "--openai-thinking",
@@ -459,7 +465,7 @@ def create_parser():
         "--openai-term-extraction-reasoning",
         type=str,
         default=None,
-        help="Reasoning string for the OpenAI term extraction translator. If not set, no reasoning field is sent for term extraction requests.",
+        help="Reasoning effort for term extraction. Uses the same model-specific field as --openai-reasoning.",
     )
 
     from babeldoc.translator.chatgpt_client import add_arguments
@@ -518,6 +524,11 @@ async def main():
     # 验证 OpenAI 参数
     if args.openai and not args.openai_api_key:
         parser.error("使用 OpenAI 服务时必须提供 API key")
+    if (
+        args.openai_max_completion_tokens is not None
+        and args.openai_max_completion_tokens <= 0
+    ):
+        parser.error("--openai-max-completion-tokens must be positive")
 
     if args.enable_process_pool:
         enable_process_pool()
@@ -555,6 +566,7 @@ async def main():
             enable_json_mode_if_requested=args.enable_json_mode_if_requested,
             send_dashscope_header=args.send_dashscope_header,
             send_temperature=not args.no_send_temperature,
+            max_completion_tokens=args.openai_max_completion_tokens,
             **translator_kwargs,
         )
         term_extraction_translator = translator
@@ -562,6 +574,7 @@ async def main():
             args.openai_term_extraction_model
             or args.openai_term_extraction_base_url
             or args.openai_term_extraction_api_key
+            or args.openai_term_extraction_reasoning is not None
         ):
             term_translator_kwargs: dict[str, Any] = {}
             if args.openai_term_extraction_reasoning is not None:
@@ -578,6 +591,7 @@ async def main():
                 enable_json_mode_if_requested=args.enable_json_mode_if_requested,
                 send_dashscope_header=args.send_dashscope_header,
                 send_temperature=not args.no_send_temperature,
+                max_completion_tokens=args.openai_max_completion_tokens,
                 **term_translator_kwargs,
             )
     else:

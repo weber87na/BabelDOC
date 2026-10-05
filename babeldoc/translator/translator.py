@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import re
 import threading
 import time
 import unicodedata
@@ -217,15 +218,30 @@ class OpenAITranslator(BaseTranslator):
         send_temperature=True,
         reasoning=None,
         thinking=None,
+        max_completion_tokens=None,
     ):
+        if max_completion_tokens is not None and max_completion_tokens <= 0:
+            raise ValueError("max_completion_tokens must be a positive number")
         super().__init__(lang_in, lang_out, ignore_cache)
         self.options = {"temperature": 0}  # 随机采样可能会打断公式标记
         self.extra_body = {}
-        # if 'gpt-5' in model and 'gpt-5-chat' not in model:
-        #     self.extra_body['reasoning'] = {
-        #         "effort": "minimal"
-        #     }
-        #     self.add_cache_impact_parameters("reasoning-effort", 'minimal')
+        self.model = model
+        # Apply OpenAI model rules even through compatible gateways, while
+        # retaining the legacy request schema for third-party model names.
+        model_name = model.lower()
+        o_series = re.match(r"^o[134](?:-|$)", model_name) is not None
+        self.is_openai_model = model_name.startswith("gpt-") or o_series
+        self.is_reasoning_model = o_series or (
+            re.match(r"^gpt-(?:5|6)(?:[.-]|$)", model_name) is not None
+            and "-chat-" not in model_name
+        )
+        # Reasoning models can reject temperature=0. Omit sampling controls
+        # conservatively, including when their reasoning effort is unspecified.
+        self.send_temperature = send_temperature and not self.is_reasoning_model
+        self.max_completion_tokens = max_completion_tokens
+        self.llm_token_limit = max_completion_tokens or (
+            16384 if self.is_reasoning_model else 2048
+        )
         self.reasoning = reasoning
         self.client = openai.OpenAI(
             base_url=base_url,
@@ -237,16 +253,23 @@ class OpenAITranslator(BaseTranslator):
                 timeout=600,
             ),
         )
-        if send_temperature:
+        if self.send_temperature:
             self.add_cache_impact_parameters("temperature", self.options["temperature"])
-        self.model = model
+        if self.is_reasoning_model or max_completion_tokens is not None:
+            self.add_cache_impact_parameters(
+                "max_completion_tokens", self.llm_token_limit
+            )
         self.enable_json_mode_if_requested = enable_json_mode_if_requested
         self.send_dashscope_header = send_dashscope_header
-        self.send_temperature = send_temperature
         self.add_cache_impact_parameters("model", self.model)
         self.add_cache_impact_parameters("prompt", self.prompt(""))
         if self.reasoning:
-            self.extra_body["reasoning"] = {"effort": self.reasoning}
+            if self.is_openai_model:
+                # Chat Completions uses reasoning_effort, not the Responses
+                # API's nested reasoning object. extra_body supports older SDKs.
+                self.extra_body["reasoning_effort"] = self.reasoning
+            else:
+                self.extra_body["reasoning"] = {"effort": self.reasoning}
             self.add_cache_impact_parameters("reasoning", self.reasoning)
         self.thinking = thinking
         if self.thinking:
@@ -262,6 +285,40 @@ class OpenAITranslator(BaseTranslator):
         self.completion_token_count = AtomicInteger()
         self.cache_hit_prompt_token_count = AtomicInteger()
 
+    def _request_options(self, llm=False):
+        options = dict(self.options) if self.send_temperature else {}
+        if llm or self.max_completion_tokens is not None:
+            token_field = (
+                "max_completion_tokens"
+                if self.is_reasoning_model
+                or (self.is_openai_model and self.max_completion_tokens is not None)
+                else "max_tokens"
+            )
+            options[token_field] = self.llm_token_limit
+        return options
+
+    def _translation_content(self, response):
+        # Never cache partial or empty translations (reasoning can exhaust the
+        # token budget before any visible text is produced).
+        if not response.choices:
+            raise ValueError(
+                f"OpenAI model {self.model} returned no translation choices"
+            )
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            raise ValueError(
+                f"OpenAI model {self.model} reached its completion token limit; "
+                "increase --openai-max-completion-tokens or lower --openai-reasoning"
+            )
+        if choice.finish_reason == "content_filter" or choice.message.refusal:
+            raise ContentFilterError(
+                f"OpenAI model {self.model} blocked the translation"
+            )
+        content = choice.message.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"OpenAI model {self.model} returned an empty translation")
+        return content.strip()
+
     @retry(
         retry=retry_if_exception_type(openai.RateLimitError),
         stop=stop_after_attempt(100),
@@ -269,18 +326,14 @@ class OpenAITranslator(BaseTranslator):
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     def do_translate(self, text, rate_limit_params: dict = None) -> str:
-        options = {}
-        if self.send_temperature:
-            options.update(self.options)
-
         response = self.client.chat.completions.create(
             model=self.model,
-            **options,
+            **self._request_options(),
             messages=self.prompt(text),
             extra_body=self.extra_body,
         )
         self.update_token_count(response)
-        return response.choices[0].message.content.strip()
+        return self._translation_content(response)
 
     def prompt(self, text):
         return [
@@ -304,10 +357,8 @@ class OpenAITranslator(BaseTranslator):
         if text is None:
             return None
 
-        options = {}
-        if self.send_temperature:
-            options.update(self.options)
-        if self.enable_json_mode_if_requested and rate_limit_params.get(
+        options = self._request_options(llm=True)
+        if self.enable_json_mode_if_requested and (rate_limit_params or {}).get(
             "request_json_mode", False
         ):
             options["response_format"] = {"type": "json_object"}
@@ -321,7 +372,6 @@ class OpenAITranslator(BaseTranslator):
             response = self.client.chat.completions.create(
                 model=self.model,
                 **options,
-                max_tokens=2048,
                 messages=[
                     {
                         "role": "user",
@@ -332,7 +382,7 @@ class OpenAITranslator(BaseTranslator):
                 extra_body=self.extra_body,
             )
             self.update_token_count(response)
-            return response.choices[0].message.content.strip()
+            return self._translation_content(response)
         except openai.BadRequestError as e:
             if (
                 "系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语，感谢您的配合。"
