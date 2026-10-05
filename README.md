@@ -59,6 +59,8 @@ See details: [EN](https://github.com/funstory-ai/jobs) | [ZH](https://github.com
 
 ## Getting Started
 
+此 fork 的 ChatGPT 帳號登入、更新安裝及翻譯範例，請見下方 [ChatGPT OAuth 快速開始](#chatgpt-oauth)。
+
 ### Install from PyPI
 
 We recommend using the Tool feature of [uv](https://github.com/astral-sh/uv) to install BabelDOC.
@@ -112,6 +114,113 @@ uv run babeldoc --files example.pdf --files example2.pdf --openai --openai-model
 
 > [!TIP]
 > The absolute path is recommended.
+
+<a id="chatgpt-oauth"></a>
+
+### ChatGPT OAuth 帳號登入與翻譯（此 fork）
+
+此分支透過官方 Codex CLI 的 App Server 使用 ChatGPT 帳號翻譯，不需要 OpenAI API Key。使用量仍受 ChatGPT／Codex 方案額度及模型存取權限制。以下範例適用於 `uv tool` 安裝；若從原始碼執行，須先依 [操作說明](docs/chatgpt-oauth.zh-TW.md#安裝此分支) 取得此 fork 的 `feat/chatgpt-oauth-translator` 分支，再於該專案目錄內，在 `babeldoc` 或 `babeldoc-chatgpt` 指令前加上 `uv run`。
+
+#### 1. 安裝或更新到此分支
+
+先安裝 Git、Node.js/npm 與 uv，再執行：
+
+```sh
+# 安裝或更新官方 Codex CLI
+npm install -g @openai/codex@latest
+
+# 安裝此 fork；已安裝 BabelDOC 時會取代現有工具
+uv tool install --python 3.12 --force --reinstall "git+https://github.com/weber87na/BabelDOC.git@feat/chatgpt-oauth-translator"
+
+# 確認 Codex 與新版登入指令可執行
+codex --version
+babeldoc-chatgpt --help
+babeldoc --help
+```
+
+`uv tool install BabelDOC` 安裝的是 PyPI 發行版。若要使用此 fork 的 OAuth 功能，請使用上面的 Git 分支網址。更新後版本號仍可能顯示 `v0.6.4`；可在 `babeldoc --help` 中確認有 `--chatgpt-login` 及 `--openai-max-completion-tokens`。
+
+完成上述安裝後，之後更新同一分支可用：
+
+```sh
+uv tool upgrade babeldoc --reinstall
+npm install -g @openai/codex@latest
+```
+
+更新程式通常不需要重新登入。
+
+#### 2. 用瀏覽器完成 OAuth 登入
+
+```sh
+babeldoc-chatgpt --chatgpt-login
+```
+
+依終端機顯示的網址在瀏覽器登入自己的 ChatGPT 帳號，等待終端機顯示「ChatGPT 登入成功」。若瀏覽器未自動開啟，可自行開啟終端機提供的網址。
+
+無法接收本機瀏覽器 callback 時，可改用裝置碼登入（需帳號及工作區允許）：
+
+```sh
+babeldoc-chatgpt --chatgpt-login --chatgpt-device-auth
+```
+
+依終端機顯示的驗證網址與裝置碼完成登入。也可使用 `babeldoc --chatgpt-login` 或 `babeldoc --chatgpt-login --chatgpt-device-auth`；`babeldoc-chatgpt` 適合先登入，因為它不載入 PDF 處理模組。
+
+#### 3. 查看模型與推理強度
+
+```sh
+babeldoc-chatgpt --chatgpt-list-models
+```
+
+輸出包含模型 ID、顯示名稱、支援的推理強度及預設強度。指定模型時請使用清單中的 ID，實際存取權及剩餘額度以翻譯請求結果為準。省略 `--chatgpt-model` 和 `--chatgpt-reasoning` 時，採用模型清單提供的預設值。
+
+#### 4. 翻譯 PDF 範例
+
+先使用預設模型翻譯英文 PDF 為繁體中文：
+
+```sh
+babeldoc --chatgpt --files "document.pdf" --lang-in en --lang-out zh-TW --qps 1
+```
+
+只有在模型清單列出 `gpt-6-luna` 時，才使用此範例：
+
+```sh
+babeldoc --chatgpt --chatgpt-model gpt-6-luna --files "document.pdf" --lang-out zh-TW --qps 1
+```
+
+若該模型也列出 `low` 推理強度，可明確指定：
+
+```sh
+babeldoc --chatgpt --chatgpt-model gpt-6-luna --chatgpt-reasoning low --files "document.pdf" --lang-out zh-TW --qps 1
+```
+
+更換其他模型時，將 `MODEL_ID` 和 `EFFORT` 換成清單實際列出的模型與強度；以下同時示範翻譯多個檔案：
+
+```sh
+babeldoc --chatgpt --chatgpt-model MODEL_ID --chatgpt-reasoning EFFORT --files "paper one.pdf" --files "paper two.pdf" --lang-out zh-TW --qps 1
+```
+
+#### 5. 登出、切換帳號或重新登入
+
+需要切換帳號或重新登入時，分別執行：
+
+```sh
+babeldoc-chatgpt --chatgpt-logout
+babeldoc-chatgpt --chatgpt-login
+babeldoc-chatgpt --chatgpt-list-models
+```
+
+BabelDOC 將登入狀態存放在獨立的 `~/.babeldoc/codex` 目錄，與一般 Codex 登入分開管理；請使用上面的 BabelDOC 登入指令。
+
+#### 模式與選項對照
+
+| 翻譯模式 | 模型選項 | 推理強度選項 | 登入方式 |
+| --- | --- | --- | --- |
+| ChatGPT OAuth：`--chatgpt` | `--chatgpt-model` | `--chatgpt-reasoning` | `babeldoc-chatgpt --chatgpt-login` |
+| OpenAI API：`--openai` | `--openai-model` | `--openai-reasoning` | `--openai-api-key` |
+
+`--chatgpt` 與 `--openai` 只能選一個；OAuth 範例不需要加入 API Key。登入、額度或模型請求失敗時，此模式不會自動切換到 API 計費。首次使用可先挑一份短 PDF 驗證。
+
+更多設定與 Windows 操作請見 [繁體中文操作說明](docs/chatgpt-oauth.zh-TW.md)。官方參考：[Codex CLI](https://learn.chatgpt.com/docs/codex/cli)、[登入方式](https://learn.chatgpt.com/docs/auth)及 [uv 工具更新](https://docs.astral.sh/uv/concepts/tools/#upgrading-tools)。
 
 ## Advanced Options
 
@@ -456,7 +565,3 @@ step by step.
 >     *   If the document is identified as heavily scanned (e.g., >80% scanned pages) AND `auto_enable_ocr_workaround` is `true` (i.e., `translation_config.auto_enable_ocr_workaround` is true), the system will then attempt to set both `ocr_workaround` to `true` and `skip_scanned_detection` to `true`.
 >
 > This means that `--auto-enable-ocr-workaround` effectively gives the system control to enable OCR processing for scanned documents, potentially overriding manual settings for `--ocr-workaround` and `--skip_scanned_detection` based on its detection results. If the document is *not* detected as heavily scanned, then the initial `false` values for `ocr_workaround` and `skip_scanned_detection` (forced by `--auto-enable-ocr-workaround` at the `TranslationConfig` initialization stage) will remain in effect unless changed by other logic.
-
-## ChatGPT 帳號登入（此 fork 新增）
-
-可透過官方 Codex App Server 使用 ChatGPT 訂閱登入，選擇帳號可用的模型與推理強度，無須 OpenAI API Key。請參閱 [繁體中文操作說明](docs/chatgpt-oauth.zh-TW.md)。此模式使用 ChatGPT／Codex 方案額度，並非無限使用。
